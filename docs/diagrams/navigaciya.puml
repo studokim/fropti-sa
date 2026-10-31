@@ -1,0 +1,29 @@
+@startuml
+title Как пользователь попадает на карточку блюда
+
+together {
+  rectangle "Каталог района" as catalog
+  rectangle "Делегирование дня" as delegate
+  rectangle "День меню" as menu
+  rectangle "Профиль повара" as cook
+}
+
+rectangle "Карточка блюда" as card
+rectangle "Шторка заказа" as sheet
+rectangle "Браузер ЮKassa" as browser
+
+catalog --> card : dishId
+delegate --> card : dishId
+menu --> card : dishId
+cook --> card : dishId
+card --> cook : cook.id
+card --> sheet : «Заказать»
+sheet --> browser : confirmationUrl
+browser --> card : fropti://payment/result
+
+note bottom of card
+  «Назад» снимает один экран.
+  Карточек в стеке может быть несколько.
+end note
+
+@enduml

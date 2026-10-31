@@ -1,0 +1,37 @@
+@startuml
+title Оформление и оплата заказа
+
+actor "Пользователь" as user
+participant "Приложение" as app
+participant "API" as api
+participant "ЮKassa" as yk
+
+user -> app : открыть карточку
+app -> api : GET /dishes/{id}
+api --> app : цена, порции, deliveryPrice
+
+user -> app : «Оплатить», N порций
+app -> api : POST /orders\n{dishId, quantity}
+
+alt порции и цена сошлись
+  api --> app : 201 orderId, суммы,\nreservedUntil
+  app -> api : POST /orders/{id}/payments
+  api -> yk : создать платёж
+  yk --> api : confirmationUrl
+  api --> app : paymentId, confirmationUrl
+  app -> user : открыть confirmationUrl\nво внешнем браузере
+  user -> yk : оплатить или закрыть
+  yk --> app : deep link\nfropti://payment/result
+  app -> user : «Оплата обрабатывается»
+  note right of api
+    Итог приходит push-уведомлением.
+    Отдельного GET статуса у экрана нет.
+    Повторный тап, пока жив резерв,
+    вызывает только /payments.
+  end note
+else 409
+  api --> app : out_of_stock\n/ insufficient_portions\n/ price_changed\n/ delivery_unavailable
+  app -> user : алерт, карточку обновить
+end
+
+@enduml
