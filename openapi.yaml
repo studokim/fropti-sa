@@ -1,0 +1,501 @@
+openapi: 3.0.3
+info:
+  title: Fropti API
+  version: 1.0.0
+  description: |
+    Контракт экрана «Карточка замороженного блюда»: каталог, отзывы, профиль повара, заказ с резервом порций и платёж.
+
+    Один процесс отдаёт API и Swagger UI (`/api-docs`). Данные лежат в памяти и после перезапуска возвращаются к учебному набору.
+
+    Учебные блюда: `borscht` (6 порций, доставка района 99 ₽), `syrniki` (2 порции), `pelmeni` (нет в наличии), `olivier` (доставка на неделе недоступна). Повар: `cook-maria`.
+
+    Даты изготовления и годности — календарные даты `YYYY-MM-DD`; на экране клиент показывает «ДД.ММ.ГГГГ». `reservedUntil` — ISO 8601 в UTC; клиент показывает локальное «ЧЧ:ММ» и обратный отсчёт.
+
+    `GET` доступны без токена. `POST /orders` и `POST /orders/{id}/payments` требуют `Authorization: Bearer demo` — для стенда подойдёт любой непустой токен.
+
+    Резерв порций живёт 15 минут. Повторный `POST /orders` по тому же блюду, пока резерв жив, возвращает уже созданный заказ и не меняет количество.
+servers:
+  - url: /
+    description: Этот же хост
+tags:
+  - name: Dishes
+    description: Карточка блюда и отзывы
+  - name: Cooks
+    description: Профиль повара
+  - name: Orders
+    description: Заказ и оплата
+paths:
+  /dishes/{id}:
+    get:
+      tags: [Dishes]
+      operationId: getDish
+      summary: Карточка блюда
+      parameters:
+        - $ref: "#/components/parameters/DishId"
+      responses:
+        "200":
+          description: Карточка блюда
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /dishes/{id}/reviews:
+    get:
+      tags: [Dishes]
+      operationId: listDishReviews
+      summary: Отзывы о блюде
+      parameters:
+        - $ref: "#/components/parameters/DishId"
+        - name: page
+          in: query
+          description: Номер страницы, с нуля
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          description: Размер страницы
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 10
+      responses:
+        "200":
+          description: Страница отзывов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewPage"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /cooks/{id}:
+    get:
+      tags: [Cooks]
+      operationId: getCook
+      summary: Профиль повара
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: cook-maria
+      responses:
+        "200":
+          description: Профиль повара и его блюда
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cook"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Создать заказ и зарезервировать порции
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrder"
+            example:
+              dishId: borscht
+              quantity: 1
+      responses:
+        "201":
+          description: Заказ создан, порции зарезервированы на 15 минут
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "200":
+          description: По этому блюду уже есть живой резерв — возвращается тот же заказ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Наличие или доставка не позволяют оформить заказ.
+            `price_changed` — форма ответа, если цена порции на сервере сменилась после просмотра карточки. На учебном наборе цены фиксированы, этот код стенд не отдаёт.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                out_of_stock:
+                  summary: Порций не осталось
+                  value:
+                    code: out_of_stock
+                    message: Блюдо закончилось
+                    availablePortions: 0
+                insufficient_portions:
+                  summary: Запрошено больше, чем есть
+                  value:
+                    code: insufficient_portions
+                    message: Доступно только 2 порции
+                    availablePortions: 2
+                delivery_unavailable:
+                  summary: Доставка на неделе недоступна
+                  value:
+                    code: delivery_unavailable
+                    message: Доставка на этой неделе недоступна. Попробуйте оформить заказ позже
+                price_changed:
+                  summary: Цена изменилась с момента просмотра карточки
+                  value:
+                    code: price_changed
+                    message: Цена изменилась
+                    price: 480
+                    total: 579
+  /orders/{id}/payments:
+    post:
+      tags: [Orders]
+      operationId: createPayment
+      summary: Создать платёж и получить ссылку на оплату
+      description: Повторный вызов при живом резерве возвращает тот же платёж и не создаёт новый заказ.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: orderId
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Платёж создан или уже ожидает оплату
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Заказ не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: not_found
+                message: Заказ не найден
+        "409":
+          description: Заказ в статусе, из которого оплата невозможна
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: invalid_status
+                message: Заказ уже нельзя оплатить
+        "410":
+          description: Резерв истёк
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: reservation_expired
+                message: Время резерва истекло. Повторите оплату — мы перепроверим наличие
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Для учебного стенда подойдёт любой непустой токен, например `demo`.
+  parameters:
+    DishId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: borscht
+  responses:
+    NotFound:
+      description: Сущность не найдена
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: not_found
+            message: Блюдо больше не публикуется
+    Unauthorized:
+      description: Нет токена
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: unauthorized
+            message: Войдите, чтобы заказать блюдо
+    ValidationError:
+      description: Некорректные параметры
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: validation_error
+            message: quantity — целое число от 1
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - unauthorized
+            - not_found
+            - validation_error
+            - out_of_stock
+            - insufficient_portions
+            - price_changed
+            - delivery_unavailable
+            - reservation_expired
+            - invalid_status
+        message:
+          type: string
+        availablePortions:
+          type: integer
+          description: Остаток порций при конфликтах наличия
+        price:
+          type: number
+          description: Новая цена порции при `price_changed`, рубли
+        total:
+          type: number
+          description: Новый итог при `price_changed`, рубли
+    Image:
+      type: object
+      required: [url, kind]
+      properties:
+        url:
+          type: string
+          format: uri
+        kind:
+          type: string
+          enum: [frozen, ready]
+    CookCard:
+      type: object
+      required: [id, name, avatarUrl, rating, hasMedicalBook]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        avatarUrl:
+          type: string
+          nullable: true
+        rating:
+          type: number
+          format: float
+        hasMedicalBook:
+          type: boolean
+    Dish:
+      type: object
+      required:
+        - id
+        - title
+        - composition
+        - allergens
+        - portionWeight
+        - calories
+        - proteins
+        - fats
+        - carbohydrates
+        - price
+        - productionDate
+        - bestBefore
+        - storageConditions
+        - reheating
+        - images
+        - availablePortions
+        - rating
+        - reviewsCount
+        - deliveryPrice
+        - cook
+        - updatedAt
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        composition:
+          type: string
+        allergens:
+          type: array
+          items:
+            type: string
+        portionWeight:
+          type: integer
+          description: Вес порции, граммы
+        calories:
+          type: number
+        proteins:
+          type: number
+        fats:
+          type: number
+        carbohydrates:
+          type: number
+          description: Граммы на порцию
+        price:
+          type: number
+          description: Цена порции, рубли
+        productionDate:
+          type: string
+          format: date
+          description: Календарная дата ISO (`YYYY-MM-DD`). На экране — «ДД.ММ.ГГГГ».
+          example: "2026-10-15"
+        bestBefore:
+          type: string
+          format: date
+          description: Календарная дата ISO (`YYYY-MM-DD`). На экране — «ДД.ММ.ГГГГ».
+          example: "2027-04-14"
+        storageConditions:
+          type: string
+        reheating:
+          type: string
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/Image"
+        availablePortions:
+          type: integer
+        rating:
+          type: number
+          format: float
+        reviewsCount:
+          type: integer
+        deliveryPrice:
+          type: number
+          description: Доставка района на неделю, рубли
+        cook:
+          $ref: "#/components/schemas/CookCard"
+        updatedAt:
+          type: string
+          format: date-time
+    Review:
+      type: object
+      required: [id, authorName, rating, text, createdAt]
+      properties:
+        id:
+          type: string
+        authorName:
+          type: string
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        text:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ReviewPage:
+      type: object
+      required: [items, hasMore]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Review"
+        hasMore:
+          type: boolean
+    CookDish:
+      type: object
+      required: [id, title, price, availablePortions]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        price:
+          type: number
+        availablePortions:
+          type: integer
+        imageUrl:
+          type: string
+          nullable: true
+    Cook:
+      type: object
+      required: [id, name, rating, hasMedicalBook, dishes]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        rating:
+          type: number
+          format: float
+        hasMedicalBook:
+          type: boolean
+        dishes:
+          type: array
+          items:
+            $ref: "#/components/schemas/CookDish"
+    CreateOrder:
+      type: object
+      required: [dishId, quantity]
+      properties:
+        dishId:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+    Order:
+      type: object
+      required: [orderId, status, reservedUntil, price, itemsTotal, deliveryPrice, total]
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, awaitingPayment, paid, acceptedByCook, inDelivery, delivered, cancelled]
+        reservedUntil:
+          type: string
+          format: date-time
+          description: Момент снятия резерва, ISO 8601 в UTC. Клиент показывает локальное «ЧЧ:ММ» и обратный отсчёт.
+        price:
+          type: number
+          description: Цена порции, рубли
+        itemsTotal:
+          type: number
+        deliveryPrice:
+          type: number
+        total:
+          type: number
+    Payment:
+      type: object
+      required: [paymentId, confirmationUrl, status]
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+        confirmationUrl:
+          type: string
+          format: uri
+          description: Учебная ссылка. В бою здесь URL платёжной формы ЮKassa.
+        status:
+          type: string
+          enum: [pending]
