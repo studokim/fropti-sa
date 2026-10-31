@@ -1,0 +1,18 @@
+# Fropti API за префиксом /fropti-sa.
+#
+# ВАЖНО: префикс передаётся приложению как есть — НЕ используем handle_path /
+# uri strip_prefix. Приложение само знает свой префикс через BASE_PATH и строит
+# правильные ссылки (редирект на /fropti-sa/api-docs, servers в openapi.json).
+#
+# Запуск приложения: BASE_PATH=/fropti-sa node src/index.js
+# или в Docker:      docker run -e BASE_PATH=/fropti-sa -p 3000:3000 ...
+
+domain.com {
+	# ... остальные блоки сайта ...
+
+	@fropti path /fropti-sa /fropti-sa/*
+	handle @fropti {
+		# если Caddy и приложение в одной docker-сети, укажите fropti-sa:3000
+		reverse_proxy localhost:3000
+	}
+}
